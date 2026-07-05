@@ -327,6 +327,34 @@ class Collate:  # pylint:disable=too-many-instance-attributes
         s_params = ", ".join(f"{k}={repr(v)}" for k, v in params.items())
         return f"{self.__class__.__name__}({s_params})"
 
+    def _batch_resize(self, batch: npt.NDArray[np.uint8], size: int) -> npt.NDArray[np.uint8]:
+        """ Resize a batch of images with arbitrary channel count
+
+        Parameters
+        ----------
+        batch
+            The batch to resize
+        size
+            The destination size
+
+        Returns
+        -------
+        The resized batch
+        """
+        channels = batch.shape[-1]
+        dims = (size, size)
+        retval = np.empty((batch.shape[0], size, size, channels), dtype=batch.dtype)
+        if channels <= 4:
+            for idx, img in enumerate(batch):
+                cv2.resize(img, dims, dst=retval[idx], interpolation=cv2.INTER_AREA)
+            return retval
+        for idx, img in enumerate(batch):
+            for start in range(0, channels, 4):
+                retval[idx, ..., start:start + 4] = cv2.resize(img[..., start:start + 4],
+                                                               dims,
+                                                               interpolation=cv2.INTER_AREA)
+        return retval
+
     def _create_targets(self, batch: npt.NDArray[np.uint8]
                         ) -> tuple[list[torch.Tensor], BatchMeta]:
         """ Compile target images, with masks, for the model output sizes.
@@ -352,16 +380,11 @@ class Collate:  # pylint:disable=too-many-instance-attributes
                      self._name, batch.shape)
         if self._resize_targets:
             reshaped = [to_float32(batch if batch.shape[1] == size else
-                                   np.array([
-                                       cv2.resize(image,
-                                                  (size, size),
-                                                  interpolation=cv2.INTER_AREA)
-                                       for image in batch
-                                      ])).reshape(self._num_inputs,
-                                                  self._batch_size,
-                                                  size,
-                                                  size,
-                                                  -1).swapaxes(0, 1)
+                                   self._batch_resize(batch, size)).reshape(self._num_inputs,
+                                                                            self._batch_size,
+                                                                            size,
+                                                                            size,
+                                                                            -1).swapaxes(0, 1)
                         for size in self._output_sizes]
         else:
             reshaped = [to_float32(batch).reshape(self._num_inputs,
